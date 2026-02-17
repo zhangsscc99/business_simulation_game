@@ -13,12 +13,25 @@ const PONY_COLORS = [
   { key: "purple", hex: 0x9900ff, css: "#9900ff" },
 ];
 
+const PONY_IMAGE_SOURCES = [
+  { key: "horse-photo-1", path: "images/1771265622295.png" },
+  { key: "horse-photo-2", path: "images/Screenshot_20260217_021422.jpg" },
+];
+
 class CatchPonyScene extends Phaser.Scene {
   constructor() {
     super("CatchPonyScene");
     this.ponies = [];
     this.score = 0;
     this.scoreValueText = null;
+  }
+
+  preload() {
+    PONY_IMAGE_SOURCES.forEach((source) => {
+      if (!this.textures.exists(source.key)) {
+        this.load.image(source.key, source.path);
+      }
+    });
   }
 
   create() {
@@ -107,6 +120,221 @@ class CatchPonyScene extends Phaser.Scene {
   }
 
   buildPonyTextures() {
+    const cutoutCanvases = PONY_IMAGE_SOURCES.map((source, index) =>
+      this.extractHorseCanvas(source.key, index),
+    ).filter(Boolean);
+
+    if (cutoutCanvases.length === 0) {
+      this.buildFallbackPonyTextures();
+      return;
+    }
+
+    PONY_COLORS.forEach((entry, index) => {
+      const sourceCanvas = cutoutCanvases[index % cutoutCanvases.length];
+      const colorized = this.colorizeHorseCanvas(sourceCanvas, entry.hex);
+      const textureKey = `pony-${entry.key}`;
+      if (this.textures.exists(textureKey)) {
+        this.textures.remove(textureKey);
+      }
+      this.textures.addCanvas(textureKey, colorized);
+    });
+  }
+
+  extractHorseCanvas(sourceTextureKey, sourceIndex) {
+    if (!this.textures.exists(sourceTextureKey)) {
+      return null;
+    }
+
+    const sourceImage = this.textures.get(sourceTextureKey).getSourceImage();
+    if (!sourceImage) {
+      return null;
+    }
+
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = sourceImage.width;
+    sourceCanvas.height = sourceImage.height;
+
+    const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+    sourceContext.drawImage(sourceImage, 0, 0);
+    const imageData = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+    const pixels = imageData.data;
+
+    let minX = sourceCanvas.width;
+    let minY = sourceCanvas.height;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      const r = pixels[i];
+      const g = pixels[i + 1];
+      const b = pixels[i + 2];
+      const pixelIndex = i / 4;
+      const x = pixelIndex % sourceCanvas.width;
+      const y = Math.floor(pixelIndex / sourceCanvas.width);
+
+      const neutralColor = Math.abs(r - g) < 14 && Math.abs(g - b) < 14;
+      const brightBackground = r > 196 && g > 196 && b > 196;
+      if (neutralColor && brightBackground) {
+        pixels[i + 3] = 0;
+        continue;
+      }
+
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+
+    sourceContext.putImageData(imageData, 0, 0);
+
+    if (maxX < 0 || maxY < 0) {
+      return null;
+    }
+
+    const pad = 18;
+    const cropX = Math.max(0, minX - pad);
+    const cropY = Math.max(0, minY - pad);
+    const cropW = Math.min(sourceCanvas.width - cropX, maxX - minX + 1 + pad * 2);
+    const cropH = Math.min(sourceCanvas.height - cropY, maxY - minY + 1 + pad * 2);
+
+    const cropped = document.createElement("canvas");
+    cropped.width = cropW;
+    cropped.height = cropH;
+
+    const croppedContext = cropped.getContext("2d");
+    croppedContext.drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+    const targetHeight = 118;
+    const scale = targetHeight / cropH;
+    const targetWidth = Math.max(72, Math.round(cropW * scale));
+
+    const finalCanvas = document.createElement("canvas");
+    finalCanvas.width = targetWidth;
+    finalCanvas.height = targetHeight;
+
+    const finalContext = finalCanvas.getContext("2d");
+    finalContext.imageSmoothingEnabled = true;
+    finalContext.imageSmoothingQuality = "high";
+    finalContext.drawImage(cropped, 0, 0, targetWidth, targetHeight);
+
+    const cleanedKey = `horse-cutout-${sourceIndex}`;
+    if (this.textures.exists(cleanedKey)) {
+      this.textures.remove(cleanedKey);
+    }
+    this.textures.addCanvas(cleanedKey, finalCanvas);
+
+    return finalCanvas;
+  }
+
+  colorizeHorseCanvas(sourceCanvas, targetHex) {
+    const canvas = document.createElement("canvas");
+    canvas.width = sourceCanvas.width;
+    canvas.height = sourceCanvas.height;
+
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(sourceCanvas, 0, 0);
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = imageData.data;
+
+    const targetColor = Phaser.Display.Color.IntegerToRGB(targetHex);
+    const [targetHue] = this.rgbToHsl(targetColor.r, targetColor.g, targetColor.b);
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i + 3] === 0) {
+        continue;
+      }
+
+      const red = pixels[i];
+      const green = pixels[i + 1];
+      const blue = pixels[i + 2];
+      const [hue, saturation, lightness] = this.rgbToHsl(red, green, blue);
+
+      if (saturation < 0.1 && lightness > 0.74) {
+        continue;
+      }
+
+      const adjustedSaturation = Math.min(1, Math.max(0.45, saturation));
+      const [nextRed, nextGreen, nextBlue] = this.hslToRgb(
+        targetHue,
+        adjustedSaturation,
+        lightness,
+      );
+
+      pixels[i] = nextRed;
+      pixels[i + 1] = nextGreen;
+      pixels[i + 2] = nextBlue;
+
+      const shadeLift = 1 + Math.min(0.35, hue * 0.05);
+      pixels[i] = Math.min(255, Math.round(pixels[i] * shadeLift));
+      pixels[i + 1] = Math.min(255, Math.round(pixels[i + 1] * shadeLift));
+      pixels[i + 2] = Math.min(255, Math.round(pixels[i + 2] * shadeLift));
+    }
+
+    context.putImageData(imageData, 0, 0);
+    return canvas;
+  }
+
+  rgbToHsl(r, g, b) {
+    const nr = r / 255;
+    const ng = g / 255;
+    const nb = b / 255;
+    const max = Math.max(nr, ng, nb);
+    const min = Math.min(nr, ng, nb);
+    const delta = max - min;
+
+    let hue = 0;
+    let saturation = 0;
+    const lightness = (max + min) / 2;
+
+    if (delta !== 0) {
+      saturation = delta / (1 - Math.abs(2 * lightness - 1));
+
+      switch (max) {
+        case nr:
+          hue = ((ng - nb) / delta) % 6;
+          break;
+        case ng:
+          hue = (nb - nr) / delta + 2;
+          break;
+        default:
+          hue = (nr - ng) / delta + 4;
+          break;
+      }
+
+      hue /= 6;
+      if (hue < 0) {
+        hue += 1;
+      }
+    }
+
+    return [hue, saturation, lightness];
+  }
+
+  hslToRgb(h, s, l) {
+    if (s === 0) {
+      const gray = Math.round(l * 255);
+      return [gray, gray, gray];
+    }
+
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const hueToChannel = (t) => {
+      let nt = t;
+      if (nt < 0) nt += 1;
+      if (nt > 1) nt -= 1;
+      if (nt < 1 / 6) return p + (q - p) * 6 * nt;
+      if (nt < 1 / 2) return q;
+      if (nt < 2 / 3) return p + (q - p) * (2 / 3 - nt) * 6;
+      return p;
+    };
+
+    const red = Math.round(hueToChannel(h + 1 / 3) * 255);
+    const green = Math.round(hueToChannel(h) * 255);
+    const blue = Math.round(hueToChannel(h - 1 / 3) * 255);
+    return [red, green, blue];
+  }
+
+  buildFallbackPonyTextures() {
     PONY_COLORS.forEach((entry) => {
       const textureKey = `pony-${entry.key}`;
       if (this.textures.exists(textureKey)) {
@@ -115,7 +343,6 @@ class CatchPonyScene extends Phaser.Scene {
 
       const g = this.make.graphics({ x: 0, y: 0, add: false });
       g.fillStyle(entry.hex, 1);
-
       g.fillRoundedRect(10, 24, 44, 24, 10);
       g.fillCircle(56, 25, 13);
       g.fillTriangle(62, 8, 56, 18, 66, 18);
@@ -123,15 +350,6 @@ class CatchPonyScene extends Phaser.Scene {
       g.fillRoundedRect(16, 44, 7, 14, 3);
       g.fillRoundedRect(30, 44, 7, 14, 3);
       g.fillTriangle(10, 33, 0, 26, 4, 42);
-
-      g.fillStyle(0xffffff, 0.9);
-      g.fillCircle(61, 23, 3);
-      g.fillStyle(0x212121, 1);
-      g.fillCircle(62, 23, 1.4);
-
-      g.lineStyle(2, 0xffffff, 0.3);
-      g.strokeRoundedRect(10, 24, 44, 24, 10);
-
       g.generateTexture(textureKey, 72, 60);
       g.destroy();
     });
