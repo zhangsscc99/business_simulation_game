@@ -1,16 +1,29 @@
 const GAME_WIDTH = 800;
 const GAME_HEIGHT = 600;
-const MATCH_DISTANCE = 88;
-const SCORE_PER_MATCH = 10;
+
+const BOARD_BOUNDS = {
+  x: 66,
+  y: 164,
+  width: 668,
+  height: 340,
+};
+
+const SLOT_COUNT = 7;
+const MATCH_COUNT = 3;
+const SCORE_PER_COMPOSE = 15;
+
+const CARD_WIDTH = 120;
+const CARD_HEIGHT = 90;
+const CARD_SLOT_SCALE = 0.72;
 
 const PONY_COLORS = [
-  { key: "red", hex: 0xff0000, css: "#ff0000" },
-  { key: "orange", hex: 0xff9900, css: "#ff9900" },
-  { key: "yellow", hex: 0xffff00, css: "#ffff00" },
-  { key: "green", hex: 0x00ff00, css: "#00ff00" },
-  { key: "cyan", hex: 0x00ffff, css: "#00ffff" },
-  { key: "blue", hex: 0x0000ff, css: "#0000ff" },
-  { key: "purple", hex: 0x9900ff, css: "#9900ff" },
+  { key: "red", hex: 0xff5f6f, label: "Red" },
+  { key: "orange", hex: 0xffa73f, label: "Orange" },
+  { key: "yellow", hex: 0xffde47, label: "Yellow" },
+  { key: "green", hex: 0x62d96b, label: "Green" },
+  { key: "cyan", hex: 0x48d6dd, label: "Cyan" },
+  { key: "blue", hex: 0x4f82ff, label: "Blue" },
+  { key: "purple", hex: 0xb06dff, label: "Purple" },
 ];
 
 const PONY_IMAGE_SOURCES = [
@@ -21,9 +34,18 @@ const PONY_IMAGE_SOURCES = [
 class CatchPonyScene extends Phaser.Scene {
   constructor() {
     super("CatchPonyScene");
-    this.ponies = [];
+    this.boardPonies = [];
+    this.stablePonies = [];
+    this.slotPositions = [];
     this.score = 0;
+    this.totalPonies = 0;
+    this.removedPonies = 0;
+    this.isBusy = false;
+    this.isGameOver = false;
     this.scoreValueText = null;
+    this.progressValueText = null;
+    this.stableCountText = null;
+    this.toastText = null;
   }
 
   preload() {
@@ -36,96 +58,154 @@ class CatchPonyScene extends Phaser.Scene {
 
   create() {
     this.drawBackground();
-    this.buildPonyTextures();
-    this.buildUi();
-    this.spawnPonies();
-
-    this.input.on("dragstart", this.onDragStart, this);
-    this.input.on("drag", this.onDrag, this);
-    this.input.on("dragend", this.onDragEnd, this);
+    this.buildHorseTextures();
+    this.buildLayout();
+    this.spawnBoardPonies();
+    this.updateHud();
   }
 
   drawBackground() {
     const g = this.add.graphics();
-    g.fillGradientStyle(0x2a1762, 0x2a1762, 0x120b2f, 0x120b2f, 1);
+    g.fillGradientStyle(0x06111e, 0x06111e, 0x122c49, 0x122c49, 1);
     g.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
-    for (let i = 0; i < 26; i += 1) {
+    for (let i = 0; i < 28; i += 1) {
       const x = Phaser.Math.Between(0, GAME_WIDTH);
       const y = Phaser.Math.Between(0, GAME_HEIGHT);
-      const radius = Phaser.Math.Between(18, 84);
-      const alpha = Phaser.Math.FloatBetween(0.07, 0.15);
-      const tint = Phaser.Display.Color.RandomRGB(20, 220).color;
-      g.fillStyle(tint, alpha);
+      const radius = Phaser.Math.Between(35, 120);
+      g.fillStyle(Phaser.Display.Color.RandomRGB(40, 210).color, Phaser.Math.FloatBetween(0.06, 0.15));
       g.fillCircle(x, y, radius);
     }
 
-    const floor = this.add.rectangle(
-      GAME_WIDTH / 2,
-      GAME_HEIGHT - 36,
-      GAME_WIDTH + 80,
-      92,
-      0x0f0a23,
-      0.66,
-    );
-    floor.setStrokeStyle(2, 0xffffff, 0.12);
+    const topGlow = this.add.rectangle(GAME_WIDTH / 2, 0, GAME_WIDTH, 180, 0xffffff, 0.07);
+    topGlow.setOrigin(0.5, 0);
   }
 
-  buildUi() {
-    const scorePanel = this.add.rectangle(18, 16, 180, 72, 0x100a24, 0.82).setOrigin(0);
-    scorePanel.setStrokeStyle(2, 0xffffff, 0.2);
+  buildLayout() {
+    const topPanel = this.add.rectangle(GAME_WIDTH / 2, 52, 742, 94, 0x112538, 0.86);
+    topPanel.setStrokeStyle(2, 0xffffff, 0.2);
 
+    const titlePill = this.add.rectangle(400, 24, 138, 34, 0x24394d, 0.95);
+    titlePill.setStrokeStyle(1, 0xffffff, 0.3);
     this.add
-      .text(30, 24, "SCORE", {
+      .text(400, 24, "Stable Match", {
         fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
-        fontSize: "20px",
-        color: "#fff4d3",
-        fontStyle: "bold",
-      })
-      .setShadow(0, 1, "#000000", 4, false, true);
-
-    this.scoreValueText = this.add.text(30, 50, "0", {
-      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
-      fontSize: "26px",
-      color: "#fefefe",
-      fontStyle: "bold",
-    });
-
-    const buttonX = GAME_WIDTH - 110;
-    const buttonY = GAME_HEIGHT - 40;
-    const button = this.add.rectangle(buttonX, buttonY, 176, 52, 0x2a184e, 0.95);
-    button.setStrokeStyle(2, 0xffffff, 0.28);
-    button.setInteractive({ useHandCursor: true });
-
-    const buttonLabel = this.add
-      .text(buttonX, buttonY, "Restart", {
-        fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
-        fontSize: "23px",
-        color: "#ffeecf",
+        fontSize: "18px",
+        color: "#f7f9ff",
         fontStyle: "bold",
       })
       .setOrigin(0.5);
 
-    button.on("pointerover", () => {
-      button.setFillStyle(0x382266, 0.98);
-      buttonLabel.setScale(1.04);
+    this.scoreValueText = this.add.text(90, 24, "Score 0", {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "20px",
+      color: "#d9f0ff",
+      fontStyle: "bold",
     });
-    button.on("pointerout", () => {
-      button.setFillStyle(0x2a184e, 0.95);
-      buttonLabel.setScale(1);
+    this.scoreValueText.setShadow(0, 2, "#00111d", 4, false, true);
+
+    this.progressValueText = this.add.text(632, 24, "Progress 0%", {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "19px",
+      color: "#d7ffe3",
+      fontStyle: "bold",
     });
-    button.on("pointerup", () => {
-      this.restartRound();
-    });
+    this.progressValueText.setOrigin(1, 0);
+    this.progressValueText.setShadow(0, 2, "#00111d", 4, false, true);
+
+    const stablePanel = this.add.rectangle(GAME_WIDTH / 2, 80, 678, 42, 0x18314a, 0.94);
+    stablePanel.setStrokeStyle(1.5, 0xffffff, 0.25);
+
+    this.add.text(88, 80, "Stable", {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "20px",
+      color: "#edfcff",
+      fontStyle: "bold",
+    }).setOrigin(0, 0.5);
+
+    this.stableCountText = this.add.text(720, 80, "0/7", {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "19px",
+      color: "#fff0cb",
+      fontStyle: "bold",
+    }).setOrigin(1, 0.5);
+
+    this.buildSlots();
+
+    const boardPanel = this.add.rectangle(
+      BOARD_BOUNDS.x + BOARD_BOUNDS.width / 2,
+      BOARD_BOUNDS.y + BOARD_BOUNDS.height / 2,
+      BOARD_BOUNDS.width + 30,
+      BOARD_BOUNDS.height + 26,
+      0x0d2235,
+      0.45,
+    );
+    boardPanel.setStrokeStyle(2, 0xffffff, 0.2);
+
+    this.makeUiButton(122, 552, 170, 44, "Shuffle", () => this.shuffleBoard());
+    this.makeUiButton(678, 552, 170, 44, "Restart", () => this.scene.restart());
+
+    this.toastText = this.add
+      .text(GAME_WIDTH / 2, GAME_HEIGHT - 28, "", {
+        fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+        fontSize: "20px",
+        color: "#fff5d7",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setAlpha(0);
   }
 
-  buildPonyTextures() {
+  buildSlots() {
+    const slotWidth = 70;
+    const gap = 10;
+    const totalWidth = SLOT_COUNT * slotWidth + (SLOT_COUNT - 1) * gap;
+    const startX = (GAME_WIDTH - totalWidth) / 2 + slotWidth / 2;
+
+    this.slotPositions = [];
+    for (let i = 0; i < SLOT_COUNT; i += 1) {
+      const x = startX + i * (slotWidth + gap);
+      const y = 80;
+      this.slotPositions.push({ x, y });
+
+      const slot = this.add.rectangle(x, y, slotWidth, 30, 0x22405f, 0.78);
+      slot.setStrokeStyle(1.5, 0xffffff, 0.38);
+
+      const shine = this.add.rectangle(x, y - 8, slotWidth - 14, 6, 0xffffff, 0.16);
+      shine.setStrokeStyle(0.5, 0xffffff, 0.2);
+    }
+  }
+
+  makeUiButton(x, y, width, height, label, onClick) {
+    const button = this.add.rectangle(x, y, width, height, 0x1f3a56, 0.95);
+    button.setStrokeStyle(1.5, 0xffffff, 0.3);
+    button.setInteractive({ useHandCursor: true });
+
+    const text = this.add.text(x, y, label, {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "23px",
+      color: "#f4fbff",
+      fontStyle: "bold",
+    }).setOrigin(0.5);
+
+    button.on("pointerover", () => {
+      button.setFillStyle(0x2a5378, 0.97);
+      text.setScale(1.04);
+    });
+    button.on("pointerout", () => {
+      button.setFillStyle(0x1f3a56, 0.95);
+      text.setScale(1);
+    });
+    button.on("pointerup", onClick);
+  }
+
+  buildHorseTextures() {
     const cutoutCanvases = PONY_IMAGE_SOURCES.map((source, index) =>
       this.extractHorseCanvas(source.key, index),
     ).filter(Boolean);
 
     if (cutoutCanvases.length === 0) {
-      this.buildFallbackPonyTextures();
+      this.buildFallbackHorseTextures();
       return;
     }
 
@@ -153,9 +233,9 @@ class CatchPonyScene extends Phaser.Scene {
     const sourceCanvas = document.createElement("canvas");
     sourceCanvas.width = sourceImage.width;
     sourceCanvas.height = sourceImage.height;
-
     const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
     sourceContext.drawImage(sourceImage, 0, 0);
+
     const imageData = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
     const pixels = imageData.data;
 
@@ -172,8 +252,8 @@ class CatchPonyScene extends Phaser.Scene {
       const x = pixelIndex % sourceCanvas.width;
       const y = Math.floor(pixelIndex / sourceCanvas.width);
 
-      const neutralColor = Math.abs(r - g) < 14 && Math.abs(g - b) < 14;
-      const brightBackground = r > 196 && g > 196 && b > 196;
+      const neutralColor = Math.abs(r - g) < 16 && Math.abs(g - b) < 16;
+      const brightBackground = r > 188 && g > 188 && b > 188;
       if (neutralColor && brightBackground) {
         pixels[i + 3] = 0;
         continue;
@@ -200,13 +280,11 @@ class CatchPonyScene extends Phaser.Scene {
     const cropped = document.createElement("canvas");
     cropped.width = cropW;
     cropped.height = cropH;
+    cropped.getContext("2d").drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
-    const croppedContext = cropped.getContext("2d");
-    croppedContext.drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-    const targetHeight = 118;
+    const targetHeight = 112;
     const scale = targetHeight / cropH;
-    const targetWidth = Math.max(72, Math.round(cropW * scale));
+    const targetWidth = Math.max(68, Math.round(cropW * scale));
 
     const finalCanvas = document.createElement("canvas");
     finalCanvas.width = targetWidth;
@@ -217,12 +295,11 @@ class CatchPonyScene extends Phaser.Scene {
     finalContext.imageSmoothingQuality = "high";
     finalContext.drawImage(cropped, 0, 0, targetWidth, targetHeight);
 
-    const cleanedKey = `horse-cutout-${sourceIndex}`;
-    if (this.textures.exists(cleanedKey)) {
-      this.textures.remove(cleanedKey);
+    const textureKey = `horse-cutout-${sourceIndex}`;
+    if (this.textures.exists(textureKey)) {
+      this.textures.remove(textureKey);
     }
-    this.textures.addCanvas(cleanedKey, finalCanvas);
-
+    this.textures.addCanvas(textureKey, finalCanvas);
     return finalCanvas;
   }
 
@@ -249,25 +326,17 @@ class CatchPonyScene extends Phaser.Scene {
       const blue = pixels[i + 2];
       const [hue, saturation, lightness] = this.rgbToHsl(red, green, blue);
 
-      if (saturation < 0.1 && lightness > 0.74) {
+      if (saturation < 0.12 && lightness > 0.7) {
         continue;
       }
 
-      const adjustedSaturation = Math.min(1, Math.max(0.45, saturation));
-      const [nextRed, nextGreen, nextBlue] = this.hslToRgb(
-        targetHue,
-        adjustedSaturation,
-        lightness,
-      );
+      const tunedSaturation = Math.min(1, Math.max(0.52, saturation));
+      const [nextRed, nextGreen, nextBlue] = this.hslToRgb(targetHue, tunedSaturation, lightness);
 
-      pixels[i] = nextRed;
-      pixels[i + 1] = nextGreen;
-      pixels[i + 2] = nextBlue;
-
-      const shadeLift = 1 + Math.min(0.35, hue * 0.05);
-      pixels[i] = Math.min(255, Math.round(pixels[i] * shadeLift));
-      pixels[i + 1] = Math.min(255, Math.round(pixels[i + 1] * shadeLift));
-      pixels[i + 2] = Math.min(255, Math.round(pixels[i + 2] * shadeLift));
+      const lift = 1 + Math.min(0.3, hue * 0.05);
+      pixels[i] = Math.min(255, Math.round(nextRed * lift));
+      pixels[i + 1] = Math.min(255, Math.round(nextGreen * lift));
+      pixels[i + 2] = Math.min(255, Math.round(nextBlue * lift));
     }
 
     context.putImageData(imageData, 0, 0);
@@ -328,13 +397,14 @@ class CatchPonyScene extends Phaser.Scene {
       return p;
     };
 
-    const red = Math.round(hueToChannel(h + 1 / 3) * 255);
-    const green = Math.round(hueToChannel(h) * 255);
-    const blue = Math.round(hueToChannel(h - 1 / 3) * 255);
-    return [red, green, blue];
+    return [
+      Math.round(hueToChannel(h + 1 / 3) * 255),
+      Math.round(hueToChannel(h) * 255),
+      Math.round(hueToChannel(h - 1 / 3) * 255),
+    ];
   }
 
-  buildFallbackPonyTextures() {
+  buildFallbackHorseTextures() {
     PONY_COLORS.forEach((entry) => {
       const textureKey = `pony-${entry.key}`;
       if (this.textures.exists(textureKey)) {
@@ -343,187 +413,250 @@ class CatchPonyScene extends Phaser.Scene {
 
       const g = this.make.graphics({ x: 0, y: 0, add: false });
       g.fillStyle(entry.hex, 1);
-      g.fillRoundedRect(10, 24, 44, 24, 10);
-      g.fillCircle(56, 25, 13);
-      g.fillTriangle(62, 8, 56, 18, 66, 18);
-      g.fillTriangle(51, 9, 45, 19, 55, 19);
-      g.fillRoundedRect(16, 44, 7, 14, 3);
-      g.fillRoundedRect(30, 44, 7, 14, 3);
-      g.fillTriangle(10, 33, 0, 26, 4, 42);
-      g.generateTexture(textureKey, 72, 60);
+      g.fillRoundedRect(7, 26, 56, 28, 12);
+      g.fillCircle(66, 26, 14);
+      g.fillTriangle(70, 8, 64, 20, 74, 20);
+      g.fillTriangle(57, 9, 51, 21, 61, 21);
+      g.fillRoundedRect(14, 49, 8, 14, 3);
+      g.fillRoundedRect(30, 49, 8, 14, 3);
+      g.generateTexture(textureKey, 80, 66);
       g.destroy();
     });
   }
 
-  spawnPonies() {
-    this.clearPonies();
+  spawnBoardPonies() {
+    this.clearBoard();
+    this.clearStable();
+    this.closeResultOverlay();
 
-    const total = Phaser.Math.Between(36, 48);
-    for (let i = 0; i < total; i += 1) {
+    this.isBusy = false;
+    this.isGameOver = false;
+    this.score = 0;
+    this.removedPonies = 0;
+    this.totalPonies = Phaser.Math.Between(36, 45);
+
+    for (let i = 0; i < this.totalPonies; i += 1) {
       const color = Phaser.Utils.Array.GetRandom(PONY_COLORS);
-      const pony = this.add.image(
-        Phaser.Math.Between(72, GAME_WIDTH - 72),
-        Phaser.Math.Between(100, GAME_HEIGHT - 90),
-        `pony-${color.key}`,
-      );
+      const x = Phaser.Math.Between(BOARD_BOUNDS.x + 52, BOARD_BOUNDS.x + BOARD_BOUNDS.width - 52);
+      const y = Phaser.Math.Between(BOARD_BOUNDS.y + 42, BOARD_BOUNDS.y + BOARD_BOUNDS.height - 42);
 
-      pony.setScale(Phaser.Math.FloatBetween(0.9, 1.12));
-      pony.setRotation(Phaser.Math.FloatBetween(-0.13, 0.13));
-      pony.setDepth(i);
-      pony.colorKey = color.key;
-      pony.isEliminating = false;
-      pony.originalScale = pony.scaleX;
-
-      pony.setInteractive({ useHandCursor: true });
-      this.input.setDraggable(pony);
-      this.ponies.push(pony);
+      const ponyCard = this.createPonyCard(color, x, y, true);
+      ponyCard.setDepth(110 + i);
+      this.boardPonies.push(ponyCard);
     }
   }
 
-  clearPonies() {
-    this.ponies.forEach((pony) => {
-      pony.destroy();
-    });
-    this.ponies = [];
-  }
+  createPonyCard(colorEntry, x, y, isBoard) {
+    const card = this.add.container(x, y);
 
-  onDragStart(_pointer, pony) {
-    if (!pony.active || pony.isEliminating) {
-      return;
-    }
+    const shadow = this.add.rectangle(5, 6, CARD_WIDTH, CARD_HEIGHT, 0x000000, 0.2);
+    const body = this.add.rectangle(0, 0, CARD_WIDTH, CARD_HEIGHT, 0xf6fbff, 0.97);
+    body.setStrokeStyle(3, 0xffffff, 0.8);
 
-    pony.originalScale = pony.scaleX;
-    pony.setScale(pony.scaleX * 1.05);
-    pony.setDepth(9999);
-  }
+    const glass = this.add.rectangle(0, -26, CARD_WIDTH - 14, 16, 0xffffff, 0.15);
+    const horse = this.add.image(0, 4, `pony-${colorEntry.key}`);
+    const fitScale = Math.min(90 / horse.width, 70 / horse.height);
+    horse.setScale(fitScale);
 
-  onDrag(_pointer, pony, dragX, dragY) {
-    if (!pony.active || pony.isEliminating) {
-      return;
-    }
+    const badge = this.add.circle(44, -28, 10, colorEntry.hex, 0.95);
+    badge.setStrokeStyle(2, 0xffffff, 0.75);
 
-    pony.x = Phaser.Math.Clamp(dragX, 36, GAME_WIDTH - 36);
-    pony.y = Phaser.Math.Clamp(dragY, 70, GAME_HEIGHT - 50);
-  }
+    card.add([shadow, body, glass, horse, badge]);
+    card.setSize(CARD_WIDTH, CARD_HEIGHT);
+    card.colorKey = colorEntry.key;
+    card.colorLabel = colorEntry.label;
+    card.isInStable = !isBoard;
 
-  onDragEnd(_pointer, pony) {
-    if (!pony.active || pony.isEliminating) {
-      return;
-    }
-
-    pony.setScale(pony.originalScale || 1);
-    pony.setDepth(this.ponies.length + 2);
-    this.tryMatchFromPony(pony);
-  }
-
-  tryMatchFromPony(anchorPony) {
-    if (!anchorPony.active || anchorPony.isEliminating) {
-      return;
-    }
-
-    const sameColor = this.ponies.filter(
-      (pony) => pony.active && !pony.isEliminating && pony.colorKey === anchorPony.colorKey,
-    );
-    if (sameColor.length < 3) {
-      return;
-    }
-
-    const cluster = this.collectConnected(anchorPony, sameColor, MATCH_DISTANCE);
-    if (cluster.length < 3) {
-      return;
-    }
-
-    cluster.sort(
-      (a, b) =>
-        Phaser.Math.Distance.Between(anchorPony.x, anchorPony.y, a.x, a.y) -
-        Phaser.Math.Distance.Between(anchorPony.x, anchorPony.y, b.x, b.y),
+    card.setInteractive(
+      new Phaser.Geom.Rectangle(-CARD_WIDTH / 2, -CARD_HEIGHT / 2, CARD_WIDTH, CARD_HEIGHT),
+      Phaser.Geom.Rectangle.Contains,
     );
 
-    const trio = cluster.slice(0, 3);
-    this.removeMatchedPonies(trio);
-  }
-
-  collectConnected(seed, pool, distanceThreshold) {
-    const queue = [seed];
-    const visited = new Set([seed]);
-
-    while (queue.length > 0) {
-      const current = queue.shift();
-      for (let i = 0; i < pool.length; i += 1) {
-        const other = pool[i];
-        if (visited.has(other) || other === current || !other.active || other.isEliminating) {
-          continue;
-        }
-        const distance = Phaser.Math.Distance.Between(current.x, current.y, other.x, other.y);
-        if (distance <= distanceThreshold) {
-          visited.add(other);
-          queue.push(other);
-        }
-      }
+    if (isBoard) {
+      card.baseScale = Phaser.Math.FloatBetween(0.94, 1.05);
+      card.setScale(card.baseScale);
+      card.setAngle(Phaser.Math.FloatBetween(-10, 10));
+      card.on("pointerdown", () => this.collectToStable(card));
+      card.on("pointerover", () => {
+        if (this.isBusy || this.isGameOver || card.isInStable) return;
+        card.setScale(card.baseScale + 0.025);
+      });
+      card.on("pointerout", () => {
+        if (this.isBusy || this.isGameOver || card.isInStable) return;
+        card.setScale(card.baseScale);
+      });
     }
 
-    return [...visited];
+    return card;
   }
 
-  removeMatchedPonies(poniesToRemove) {
-    if (poniesToRemove.length < 3) {
+  collectToStable(ponyCard) {
+    if (this.isBusy || this.isGameOver || ponyCard.isInStable) {
       return;
     }
 
-    const color = poniesToRemove[0].colorKey;
-    poniesToRemove.forEach((pony) => {
-      pony.isEliminating = true;
-      pony.disableInteractive();
-    });
+    if (this.stablePonies.length >= SLOT_COUNT) {
+      this.showToast("Stable is full");
+      this.endRound(false, "Stable Full");
+      return;
+    }
 
-    const center = this.groupCenter(poniesToRemove);
-    this.bumpScore(SCORE_PER_MATCH, center.x, center.y);
+    this.isBusy = true;
+    ponyCard.isInStable = true;
+    ponyCard.disableInteractive();
+    ponyCard.removeAllListeners();
+    this.boardPonies = this.boardPonies.filter((item) => item !== ponyCard);
+
+    const slotIndex = this.stablePonies.length;
+    this.stablePonies.push(ponyCard);
+    const target = this.slotPositions[slotIndex];
 
     this.tweens.add({
-      targets: poniesToRemove,
-      alpha: 0,
-      scaleX: 0,
-      scaleY: 0,
-      angle: "+=160",
-      duration: 280,
-      ease: "Back.In",
+      targets: ponyCard,
+      x: target.x,
+      y: target.y,
+      angle: 0,
+      scaleX: CARD_SLOT_SCALE,
+      scaleY: CARD_SLOT_SCALE,
+      duration: 210,
+      ease: "Cubic.Out",
+      onStart: () => ponyCard.setDepth(2200 + slotIndex),
       onComplete: () => {
-        poniesToRemove.forEach((pony) => {
-          this.ponies = this.ponies.filter((item) => item !== pony);
-          pony.destroy();
-        });
-        this.findAndChainMatches(color);
+        this.isBusy = false;
+        this.updateHud();
+        this.checkStableMatches();
       },
     });
   }
 
-  findAndChainMatches(colorKey) {
-    const candidates = this.ponies.filter(
-      (pony) => pony.active && !pony.isEliminating && pony.colorKey === colorKey,
-    );
-    const seen = new Set();
+  checkStableMatches() {
+    if (this.isBusy || this.isGameOver) {
+      return;
+    }
 
-    for (let i = 0; i < candidates.length; i += 1) {
-      const pony = candidates[i];
-      if (seen.has(pony)) {
-        continue;
+    const grouped = new Map();
+    this.stablePonies.forEach((pony) => {
+      if (!grouped.has(pony.colorKey)) {
+        grouped.set(pony.colorKey, []);
       }
+      grouped.get(pony.colorKey).push(pony);
+    });
 
-      const cluster = this.collectConnected(pony, candidates, MATCH_DISTANCE);
-      cluster.forEach((item) => seen.add(item));
-
-      if (cluster.length >= 3) {
-        this.removeMatchedPonies(cluster.slice(0, 3));
-        return;
+    let matched = null;
+    grouped.forEach((group) => {
+      if (!matched && group.length >= MATCH_COUNT) {
+        matched = group.slice(0, MATCH_COUNT);
       }
+    });
+
+    if (matched) {
+      this.composeMatchedPonies(matched);
+      return;
+    }
+
+    if (this.boardPonies.length === 0 && this.stablePonies.length === 0) {
+      this.endRound(true, "Perfect Stable");
+      return;
+    }
+
+    if (this.stablePonies.length >= SLOT_COUNT) {
+      this.endRound(false, "Stable Full");
     }
   }
 
-  groupCenter(items) {
+  composeMatchedPonies(matchedPonies) {
+    this.isBusy = true;
+    const center = this.getCenterPoint(matchedPonies);
+
+    this.flashCompose(center.x, center.y, matchedPonies[0].colorLabel);
+
+    this.tweens.add({
+      targets: matchedPonies,
+      x: center.x,
+      y: center.y,
+      alpha: 0,
+      angle: "+=120",
+      scaleX: 0.08,
+      scaleY: 0.08,
+      duration: 260,
+      ease: "Back.In",
+      onComplete: () => {
+        matchedPonies.forEach((pony) => {
+          this.stablePonies = this.stablePonies.filter((item) => item !== pony);
+          pony.destroy();
+          this.removedPonies += 1;
+        });
+
+        this.score += SCORE_PER_COMPOSE;
+        this.compactStable(() => {
+          this.updateHud();
+          this.isBusy = false;
+          this.checkStableMatches();
+        });
+      },
+    });
+  }
+
+  compactStable(onDone) {
+    if (this.stablePonies.length === 0) {
+      onDone();
+      return;
+    }
+
+    let completeCount = 0;
+    this.stablePonies.forEach((pony, index) => {
+      const target = this.slotPositions[index];
+      this.tweens.add({
+        targets: pony,
+        x: target.x,
+        y: target.y,
+        duration: 160,
+        ease: "Sine.Out",
+        onComplete: () => {
+          completeCount += 1;
+          if (completeCount === this.stablePonies.length) {
+            onDone();
+          }
+        },
+      });
+    });
+  }
+
+  shuffleBoard() {
+    if (this.isBusy || this.isGameOver || this.boardPonies.length === 0) {
+      return;
+    }
+
+    this.isBusy = true;
+    this.showToast("Shuffle");
+
+    let completeCount = 0;
+    this.boardPonies.forEach((pony) => {
+      const x = Phaser.Math.Between(BOARD_BOUNDS.x + 52, BOARD_BOUNDS.x + BOARD_BOUNDS.width - 52);
+      const y = Phaser.Math.Between(BOARD_BOUNDS.y + 42, BOARD_BOUNDS.y + BOARD_BOUNDS.height - 42);
+
+      this.tweens.add({
+        targets: pony,
+        x,
+        y,
+        angle: Phaser.Math.FloatBetween(-10, 10),
+        duration: 320,
+        ease: "Back.Out",
+        onComplete: () => {
+          completeCount += 1;
+          if (completeCount === this.boardPonies.length) {
+            this.isBusy = false;
+          }
+        },
+      });
+    });
+  }
+
+  getCenterPoint(items) {
     const total = items.reduce(
-      (acc, pony) => {
-        acc.x += pony.x;
-        acc.y += pony.y;
+      (acc, item) => {
+        acc.x += item.x;
+        acc.y += item.y;
         return acc;
       },
       { x: 0, y: 0 },
@@ -535,36 +668,140 @@ class CatchPonyScene extends Phaser.Scene {
     };
   }
 
-  bumpScore(amount, x, y) {
-    this.score += amount;
-    this.scoreValueText.setText(String(this.score));
+  flashCompose(x, y, colorLabel) {
+    const ring = this.add.circle(x, y, 16, 0xffffff, 0.35);
+    ring.setStrokeStyle(4, 0xffffff, 0.85);
 
-    const burst = this.add
-      .text(x, y, `+${amount}`, {
-        fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
-        fontSize: "30px",
-        color: "#fff17a",
-        fontStyle: "bold",
-      })
-      .setOrigin(0.5);
-    burst.setShadow(0, 2, "#000000", 4, false, true);
+    const text = this.add.text(x, y - 14, `${colorLabel} x3`, {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "28px",
+      color: "#fff4ce",
+      fontStyle: "bold",
+    }).setOrigin(0.5);
+    text.setShadow(0, 2, "#00151f", 4, false, true);
 
     this.tweens.add({
-      targets: burst,
-      y: y - 34,
+      targets: ring,
+      scaleX: 7.5,
+      scaleY: 7.5,
       alpha: 0,
-      scaleX: 1.25,
-      scaleY: 1.25,
-      duration: 420,
+      duration: 320,
       ease: "Quad.Out",
-      onComplete: () => burst.destroy(),
+      onComplete: () => ring.destroy(),
+    });
+
+    this.tweens.add({
+      targets: text,
+      y: y - 50,
+      alpha: 0,
+      duration: 430,
+      ease: "Cubic.Out",
+      onComplete: () => text.destroy(),
     });
   }
 
-  restartRound() {
-    this.score = 0;
-    this.scoreValueText.setText("0");
-    this.spawnPonies();
+  showToast(message) {
+    if (!this.toastText) {
+      return;
+    }
+
+    this.toastText.setText(message);
+    this.toastText.setAlpha(1);
+
+    this.tweens.killTweensOf(this.toastText);
+    this.tweens.add({
+      targets: this.toastText,
+      y: GAME_HEIGHT - 44,
+      alpha: 0,
+      duration: 700,
+      ease: "Quad.Out",
+      onComplete: () => {
+        this.toastText.setY(GAME_HEIGHT - 28);
+      },
+    });
+  }
+
+  endRound(isWin, title) {
+    if (this.isGameOver) {
+      return;
+    }
+
+    this.isGameOver = true;
+    this.isBusy = true;
+
+    const cover = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x03101a, 0.55);
+    const panel = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, 430, 230, isWin ? 0x1a4450 : 0x4b1f2a, 0.95);
+    panel.setStrokeStyle(2, 0xffffff, 0.34);
+
+    const titleText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 56, title, {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "44px",
+      color: isWin ? "#cefff1" : "#ffe6e9",
+      fontStyle: "bold",
+    }).setOrigin(0.5);
+
+    const scoreText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 6, `Score ${this.score}`, {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "34px",
+      color: "#fef8de",
+      fontStyle: "bold",
+    }).setOrigin(0.5);
+
+    const restartButton = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 62, 220, 54, 0x214e5d, 0.98);
+    restartButton.setStrokeStyle(2, 0xffffff, 0.3);
+    restartButton.setInteractive({ useHandCursor: true });
+    const restartLabel = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 62, "Play Again", {
+      fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+      fontSize: "30px",
+      color: "#ebf8ff",
+      fontStyle: "bold",
+    }).setOrigin(0.5);
+
+    restartButton.on("pointerover", () => {
+      restartButton.setFillStyle(0x2f6375, 1);
+      restartLabel.setScale(1.04);
+    });
+    restartButton.on("pointerout", () => {
+      restartButton.setFillStyle(0x214e5d, 0.98);
+      restartLabel.setScale(1);
+    });
+    restartButton.on("pointerup", () => this.scene.restart());
+
+    this.resultOverlay = [cover, panel, titleText, scoreText, restartButton, restartLabel];
+  }
+
+  closeResultOverlay() {
+    if (!this.resultOverlay) {
+      return;
+    }
+
+    this.resultOverlay.forEach((item) => item.destroy());
+    this.resultOverlay = null;
+  }
+
+  clearBoard() {
+    this.boardPonies.forEach((pony) => pony.destroy());
+    this.boardPonies = [];
+  }
+
+  clearStable() {
+    this.stablePonies.forEach((pony) => pony.destroy());
+    this.stablePonies = [];
+  }
+
+  updateHud() {
+    if (this.scoreValueText) {
+      this.scoreValueText.setText(`Score ${this.score}`);
+    }
+
+    if (this.stableCountText) {
+      this.stableCountText.setText(`${this.stablePonies.length}/${SLOT_COUNT}`);
+    }
+
+    if (this.progressValueText) {
+      const progress = this.totalPonies === 0 ? 0 : Math.round((this.removedPonies / this.totalPonies) * 100);
+      this.progressValueText.setText(`Progress ${progress}%`);
+    }
   }
 }
 
