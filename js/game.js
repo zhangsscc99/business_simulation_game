@@ -14,7 +14,7 @@ const SCORE_PER_COMPOSE = 15;
 
 const CARD_WIDTH = 120;
 const CARD_HEIGHT = 90;
-const CARD_SLOT_SCALE = 0.72;
+const CARD_SLOT_SCALE = 0.52;
 
 const PONY_COLORS = [
   { key: "red", hex: 0xff5f6f, label: "Red" },
@@ -35,7 +35,7 @@ class CatchPonyScene extends Phaser.Scene {
   constructor() {
     super("CatchPonyScene");
     this.boardPonies = [];
-    this.stablePonies = [];
+    this.stableBoxes = [];
     this.slotPositions = [];
     this.score = 0;
     this.totalPonies = 0;
@@ -157,21 +157,23 @@ class CatchPonyScene extends Phaser.Scene {
   }
 
   buildSlots() {
-    const slotWidth = 70;
+    const slotWidth = 72;
     const gap = 10;
     const totalWidth = SLOT_COUNT * slotWidth + (SLOT_COUNT - 1) * gap;
     const startX = (GAME_WIDTH - totalWidth) / 2 + slotWidth / 2;
 
     this.slotPositions = [];
+    this.stableBoxes = [];
     for (let i = 0; i < SLOT_COUNT; i += 1) {
       const x = startX + i * (slotWidth + gap);
       const y = 80;
       this.slotPositions.push({ x, y });
+      this.stableBoxes.push({ x, y, colorKey: null, cards: [] });
 
-      const slot = this.add.rectangle(x, y, slotWidth, 30, 0x22405f, 0.78);
+      const slot = this.add.rectangle(x, y, slotWidth, 34, 0x22405f, 0.78);
       slot.setStrokeStyle(1.5, 0xffffff, 0.38);
 
-      const shine = this.add.rectangle(x, y - 8, slotWidth - 14, 6, 0xffffff, 0.16);
+      const shine = this.add.rectangle(x, y - 9, slotWidth - 14, 6, 0xffffff, 0.16);
       shine.setStrokeStyle(0.5, 0xffffff, 0.2);
     }
   }
@@ -433,17 +435,23 @@ class CatchPonyScene extends Phaser.Scene {
     this.isGameOver = false;
     this.score = 0;
     this.removedPonies = 0;
-    this.totalPonies = Phaser.Math.Between(36, 45);
-
-    for (let i = 0; i < this.totalPonies; i += 1) {
+    const colorTriplets = Phaser.Math.Between(12, 15);
+    const colorQueue = [];
+    for (let i = 0; i < colorTriplets; i += 1) {
       const color = Phaser.Utils.Array.GetRandom(PONY_COLORS);
+      colorQueue.push(color, color, color);
+    }
+    Phaser.Utils.Array.Shuffle(colorQueue);
+
+    this.totalPonies = colorQueue.length;
+    colorQueue.forEach((color, i) => {
       const x = Phaser.Math.Between(BOARD_BOUNDS.x + 52, BOARD_BOUNDS.x + BOARD_BOUNDS.width - 52);
       const y = Phaser.Math.Between(BOARD_BOUNDS.y + 42, BOARD_BOUNDS.y + BOARD_BOUNDS.height - 42);
 
       const ponyCard = this.createPonyCard(color, x, y, true);
       ponyCard.setDepth(110 + i);
       this.boardPonies.push(ponyCard);
-    }
+    });
   }
 
   createPonyCard(colorEntry, x, y, isBoard) {
@@ -495,8 +503,9 @@ class CatchPonyScene extends Phaser.Scene {
       return;
     }
 
-    if (this.stablePonies.length >= SLOT_COUNT) {
-      this.showToast("Stable is full");
+    const targetBox = this.findTargetBox(ponyCard.colorKey);
+    if (!targetBox) {
+      this.showToast("No matching box");
       this.endRound(false, "Stable Full");
       return;
     }
@@ -507,9 +516,11 @@ class CatchPonyScene extends Phaser.Scene {
     ponyCard.removeAllListeners();
     this.boardPonies = this.boardPonies.filter((item) => item !== ponyCard);
 
-    const slotIndex = this.stablePonies.length;
-    this.stablePonies.push(ponyCard);
-    const target = this.slotPositions[slotIndex];
+    if (!targetBox.colorKey) {
+      targetBox.colorKey = ponyCard.colorKey;
+    }
+    targetBox.cards.push(ponyCard);
+    const target = this.getCardTargetInBox(targetBox, targetBox.cards.length - 1);
 
     this.tweens.add({
       targets: ponyCard,
@@ -520,52 +531,46 @@ class CatchPonyScene extends Phaser.Scene {
       scaleY: CARD_SLOT_SCALE,
       duration: 210,
       ease: "Cubic.Out",
-      onStart: () => ponyCard.setDepth(2200 + slotIndex),
+      onStart: () => ponyCard.setDepth(2200 + this.stableBoxes.indexOf(targetBox)),
       onComplete: () => {
         this.isBusy = false;
         this.updateHud();
-        this.checkStableMatches();
+        this.checkBoxMatch(targetBox);
       },
     });
   }
 
-  checkStableMatches() {
+  findTargetBox(colorKey) {
+    const sameColorBox = this.stableBoxes.find((box) => box.colorKey === colorKey);
+    if (sameColorBox) {
+      return sameColorBox;
+    }
+    return this.stableBoxes.find((box) => box.colorKey === null) || null;
+  }
+
+  getCardTargetInBox(box, stackIndex) {
+    const index = Math.min(stackIndex, MATCH_COUNT - 1);
+    const xOffset = (index - 1) * 10;
+    const yOffset = -index * 4;
+    return { x: box.x + xOffset, y: box.y + yOffset };
+  }
+
+  checkBoxMatch(box) {
     if (this.isBusy || this.isGameOver) {
       return;
     }
 
-    const grouped = new Map();
-    this.stablePonies.forEach((pony) => {
-      if (!grouped.has(pony.colorKey)) {
-        grouped.set(pony.colorKey, []);
-      }
-      grouped.get(pony.colorKey).push(pony);
-    });
-
-    let matched = null;
-    grouped.forEach((group) => {
-      if (!matched && group.length >= MATCH_COUNT) {
-        matched = group.slice(0, MATCH_COUNT);
-      }
-    });
-
-    if (matched) {
-      this.composeMatchedPonies(matched);
+    if (box.cards.length >= MATCH_COUNT) {
+      this.composeMatchedPonies(box);
       return;
     }
 
-    if (this.boardPonies.length === 0 && this.stablePonies.length === 0) {
-      this.endRound(true, "Perfect Stable");
-      return;
-    }
-
-    if (this.stablePonies.length >= SLOT_COUNT) {
-      this.endRound(false, "Stable Full");
-    }
+    this.evaluateRoundState();
   }
 
-  composeMatchedPonies(matchedPonies) {
+  composeMatchedPonies(box) {
     this.isBusy = true;
+    const matchedPonies = box.cards.slice(0, MATCH_COUNT);
     const center = this.getCenterPoint(matchedPonies);
 
     this.flashCompose(center.x, center.y, matchedPonies[0].colorLabel);
@@ -582,44 +587,52 @@ class CatchPonyScene extends Phaser.Scene {
       ease: "Back.In",
       onComplete: () => {
         matchedPonies.forEach((pony) => {
-          this.stablePonies = this.stablePonies.filter((item) => item !== pony);
           pony.destroy();
           this.removedPonies += 1;
         });
 
+        box.cards = [];
+        box.colorKey = null;
         this.score += SCORE_PER_COMPOSE;
-        this.compactStable(() => {
-          this.updateHud();
-          this.isBusy = false;
-          this.checkStableMatches();
-        });
+        this.updateHud();
+        this.isBusy = false;
+        this.evaluateRoundState();
       },
     });
   }
 
-  compactStable(onDone) {
-    if (this.stablePonies.length === 0) {
-      onDone();
+  getStableCardCount() {
+    return this.stableBoxes.reduce((sum, box) => sum + box.cards.length, 0);
+  }
+
+  evaluateRoundState() {
+    if (this.isBusy || this.isGameOver) {
       return;
     }
 
-    let completeCount = 0;
-    this.stablePonies.forEach((pony, index) => {
-      const target = this.slotPositions[index];
-      this.tweens.add({
-        targets: pony,
-        x: target.x,
-        y: target.y,
-        duration: 160,
-        ease: "Sine.Out",
-        onComplete: () => {
-          completeCount += 1;
-          if (completeCount === this.stablePonies.length) {
-            onDone();
-          }
-        },
-      });
-    });
+    const stableCardCount = this.getStableCardCount();
+
+    if (this.boardPonies.length === 0) {
+      if (stableCardCount === 0) {
+        this.endRound(true, "Perfect Stable");
+      } else {
+        this.endRound(false, "No More Horses");
+      }
+      return;
+    }
+
+    const hasEmptyBox = this.stableBoxes.some((box) => box.colorKey === null);
+    if (hasEmptyBox) {
+      return;
+    }
+
+    const boardColors = new Set(this.boardPonies.map((pony) => pony.colorKey));
+    const boxColors = new Set(this.stableBoxes.map((box) => box.colorKey));
+    const hasPlaceableMove = [...boardColors].some((color) => boxColors.has(color));
+
+    if (!hasPlaceableMove) {
+      this.endRound(false, "Stable Full");
+    }
   }
 
   shuffleBoard() {
@@ -785,8 +798,11 @@ class CatchPonyScene extends Phaser.Scene {
   }
 
   clearStable() {
-    this.stablePonies.forEach((pony) => pony.destroy());
-    this.stablePonies = [];
+    this.stableBoxes.forEach((box) => {
+      box.cards.forEach((pony) => pony.destroy());
+      box.cards = [];
+      box.colorKey = null;
+    });
   }
 
   updateHud() {
@@ -795,7 +811,8 @@ class CatchPonyScene extends Phaser.Scene {
     }
 
     if (this.stableCountText) {
-      this.stableCountText.setText(`${this.stablePonies.length}/${SLOT_COUNT}`);
+      const usedBoxes = this.stableBoxes.filter((box) => box.colorKey !== null).length;
+      this.stableCountText.setText(`${usedBoxes}/${SLOT_COUNT}`);
     }
 
     if (this.progressValueText) {
